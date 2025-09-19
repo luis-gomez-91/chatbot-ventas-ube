@@ -4,8 +4,10 @@ from argo.skills import chat
 import requests
 from config import TOKEN, API_URL
 import streamlit as st
-from schemas.carreras import Carreras, DataCarreras
+from schemas.carreras import Carreras, DataCarreras, Carrera
 from schemas.grupos import Grupos, GrupoData
+from typing import List
+from api_helper import fetch_carreras, fetch_grupos
 
 @st.cache_resource
 def initialize_agent():
@@ -28,27 +30,16 @@ def initialize_agent():
     )
 
     agent.system_prompt = """
-        Eres un vendedor de la Universidad Bolivariana del Ecuador (UBE).
-        Responde de manera cordial y precisa a preguntas sobre:
-        1. Información general de las carreras.
-        2. Información de la malla de una carrera específica.
-        3. Información de los grupos disponibles de una carrera específica.
-        Dependiendo de lo que pregunte el usuario, llama a la API correspondiente.
+        Eres un vendedor de la Universidad Bolivariana del Ecuador (UBE). Responde de manera cordial y precisa a
+        preguntas sobre carreras. Si te preguntan por grupos o mallas, identifica el nombre de la carrera en el mensaje
+        del usuario para buscar la información.
+        Ejemplo:
+        Pregunta: "¿Grupos de la carrera de Derecho?". Respuesta esperada: invocar la herramienta con 'nombre_carrera'='Derecho'.
+        Si no tienes la informacion necesario. indica que visiten la pagina web para mas informacion: https://sga.ube.edu.ec/
     """
 
-    try:
-        # res = requests.get(f"{API_URL}carreras")
-        response = requests.get(f"https://sga.ube.edu.ec/api/ventas/carreras")
-        response.raise_for_status()
-        carreras_data = response.json()
-        print(carreras_data)
-        carreras_instance = Carreras(
-            status=carreras_data["status"],
-            data=DataCarreras(**carreras_data["data"])
-        )
-        agent.carreras = carreras_instance
-    except requests.RequestException as e:
-        return f"Error al obtener las carreras: {e}"
+    carreras_instance = fetch_carreras()
+    agent.carreras = carreras_instance
 
     @agent.tool
     async def list_carreras():
@@ -72,58 +63,40 @@ def initialize_agent():
         # print(response)
         return response
     
-    @agent.tool
-    async def fetch_grupos(id_carrera: int):
-        # res = requests.get(f"{API_URL}grupos/")
-        response = requests.get(f"https://sga.ube.edu.ec/api/ventas/grupos/{id_carrera}")
-        response.raise_for_status()
-        grupos_data = response.json()
-        
-        print(grupos_data)
+    # @agent.tool
+    # async def fetch_grupos(id_carrera: int):
+    #     # res = requests.get(f"{API_URL}grupos/")
+    #     response = requests.get(f"https://sga.ube.edu.ec/api/ventas/grupos/{id_carrera}")
+    #     response.raise_for_status()
+    #     grupos_data = response.json()
+    #     print(grupos_data)
+    #     print("\n")
+    #     grupos_instance = Grupos(**grupos_data)
+        # agent.grupos = grupos_instance
 
-        grupos_instance = Grupos(
-            status=grupos_data["status"],
-            data=GrupoData(**grupos_data["data"])
-        )
+
+    @agent.tool
+    async def listar_grupos(id_carrera: int):
+        """
+        Herramienta que lista los grupos de una carrera específica.
+        Requiere el 'id_carrera' de la carrera como un número entero.
+        Este ID se debe obtener primero con otra skill.
+        """
+        print(f"ID RECIBE LISTAR_GRUPOS: {id_carrera}")
+        grupos_instance = await fetch_grupos(id_carrera)
         agent.grupos = grupos_instance
-
-    @agent.tool
-    async def listar_grupos():
         grupos = agent.grupos.data
-        if not grupos:
-            return "No conozco ese grupo"
 
         if not grupos:
             return "No hay grupos disponibles que inicien clase proximamente."
 
-        response = f"Los grupos de la carrera {grupos[0].carrera} disponibles son:"
+        response = f"Los grupos disponibles son:"
         response = "\n".join(
             f"- Paralelo: {grupo.nombre}, Fecha de inicio de clases aproximado: {grupo.fecha_inicio}, Sesion: {grupo.sesion}, Modalidad: {grupo.modalidad}"
             for grupo in grupos
         )
         print(response)
         return response
-    
-    async def list_grupos_de_carrera(id_carrera: int):
-        # Primero obtenemos los grupos de la API
-        response = requests.get(f"https://sga.ube.edu.ec/api/ventas/grupos/{id_carrera}")
-        response.raise_for_status()
-        grupos_data = response.json()
-        grupos_instance = Grupos(
-            status=grupos_data["status"],
-            data=GrupoData(**grupos_data["data"])
-        )
-
-        grupos = grupos_instance.data.grupos  # Ajusta según tu schema
-        if not grupos:
-            return "No hay grupos disponibles para esta carrera."
-
-        response_text = f"Los grupos de la carrera {grupos[0].carrera} disponibles son:\n"
-        response_text += "\n".join(
-            f"- Paralelo: {grupo.nombre}, Fecha de inicio: {grupo.fecha_inicio}, Sesión: {grupo.sesion}, Modalidad: {grupo.modalidad}"
-            for grupo in grupos
-        )
-        return response_text
             
     # @agent.skill
     # async def responder_usuario(ctx: argo.Context):
@@ -133,30 +106,80 @@ def initialize_agent():
     #     await ctx.reply()
 
     @agent.skill
-    async def responder_usuario(ctx: argo.Context):
-        user_input = ctx.messages[-1].content.lower() 
-
-        if "carrera" in user_input and "grupo" not in user_input:
-            tool = await ctx.equip(tools=[list_carreras])
-            result = await ctx.invoke(tool)
-        elif "grupo" in user_input:
-            import re
-            match = re.search(r"carrera (\d+)", user_input)
-            if match:
-                id_carrera = int(match.group(1))
-                await fetch_grupos(id_carrera)
-                tool = await ctx.equip(tools=[list_grupos_de_carrera])
-                result = await ctx.invoke(tool, id_carrera=id_carrera)
-            else:
-                result = "No entendí el ID de la carrera. Por favor proporciona un número de carrera."
-        else:
-            result = "No entendí tu consulta. Pregunta sobre carreras o grupos."
-
+    async def skill_listar_carreras(ctx: argo.Context):
+        """
+            Esta skill es para cuando el usuario quiere una visión general de la oferta académica.
+            "¿Qué carreras tienen?"
+            "Quiero ver la lista de carreras."
+            "Háblame de las carreras de la UBE."
+            "¿Qué opciones de estudio ofrecen?"
+        """
+        tool = await ctx.equip(tools=[list_carreras])
+        result = await ctx.invoke(tool)
         ctx.add(Message.system(result))
         await ctx.reply()
 
 
+    @agent.skill
+    async def skill_listar_grupos(ctx: argo.Context, nombre_carrera: str = "ELECTRICIDAD"):
+        """
+        Activa esta skill SOLO si el usuario pregunta por los grupos de una carrera específica.
+        El agente DEBE identificar el nombre de la carrera en el mensaje del usuario (ej. 'Derecho', 'Contabilidad')
+        y pasar ese valor directamente al argumento 'nombre_carrera'.
+        """
+
+        ultimo_mensaje = ctx.messages[-1] 
+        print(f"El usuario dijo: {ultimo_mensaje.content}")
+
+        if not nombre_carrera:
+            print("SIN NOMBRE")
+            await ctx.reply(f"Claro, ¿de qué carrera te gustaría saber los grupos? Si quieres, puedo listarte todas las carreras disponibles.")
+            return
+
+        id_carrera = find_carrera_id_by_name(nombre_carrera)
+        print(f"ID RETORNA: {id_carrera}")
+
+        if id_carrera is None:
+            await ctx.reply(f"Lo siento, no encontré la carrera de '{nombre_carrera}'. ¿Podrías verificar si está bien escrita?")
+            return
+
+        print("POSI")
+        # tool = await ctx.equip(tools=[listar_grupos])
+        # result = await ctx.invoke(tool, id_carrera=id_carrera)
+
+        grupos_instance = await fetch_grupos(id_carrera)
+        grupos = grupos_instance.data
+
+        if not grupos:
+            return "No hay grupos disponibles que inicien clase proximamente."
+
+        result = f"Los grupos disponibles son:"
+        result = "\n".join(
+            f"- Paralelo: {grupo.nombre}, Fecha de inicio de clases aproximado: {grupo.fecha_inicio}, Sesion: {grupo.sesion}, Modalidad: {grupo.modalidad}"
+            for grupo in grupos
+        )
+
+        ctx.add(Message.system(result))
+        await ctx.reply()
 
    
+    def find_carrera_id_by_name(carrera_name: str):
+        print("BUSCANDO ID DE CARRERA")
+        carreras_grado: List[DataCarreras] = agent.carreras.data.grado
+        carreras_postgrado = agent.carreras.data.postgrado
+
+        for carrera in carreras_grado:
+            print(f"GRADO: {carrera.id} - {carrera.nombre}")
+            if carrera.nombre.lower() == carrera_name.lower():
+                print(f"GRADO SELECT: {carrera.id} - {carrera.nombre}")
+                return carrera.id
+            
+        for carrera in carreras_postgrado:
+            print(f"POSTGRADO: {carrera.id} - {carrera.nombre}")
+            if carrera.nombre.lower() == carrera_name.lower():
+                print(f"POSTGRADO SELECT: {carrera.id} - {carrera.nombre}")
+                return carrera.id
+        return None
+
 
     return agent
