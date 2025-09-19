@@ -2,6 +2,7 @@ import requests
 from schemas.carreras import Carreras, DataCarreras
 from schemas.grupos import Grupos
 from schemas.malla import Malla
+from schemas.base import Matricular
 from config import API_URL
 
 
@@ -29,4 +30,11 @@ async def fetch_malla(id_carrera: int):
     data = response.json()
     # print(data)
     malla_instance = Malla(**data)
+    return malla_instance
+
+async def matricular():
+    response = requests.post(f"{API_URL}matricular", json={"aprove": True})
+    response.raise_for_status()
+    data = response.json()
+    malla_instance = Matricular(**data)
     return malla_instance

@@ -6,3 +6,6 @@ class Response(BaseModel):
 
 class Error(Response):
     message: str
+
+class Matricular(Response):
+    message: str

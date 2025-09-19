@@ -3,7 +3,7 @@ from argo import Message
 from argo.skills import chat
 from config import TOKEN
 import streamlit as st
-from api_helper import fetch_carreras, fetch_grupos, fetch_malla
+from api_helper import fetch_carreras, fetch_grupos, fetch_malla, matricular
 from utils import get_id_by_name, formatear_texto_carreras
 
 @st.cache_resource
@@ -27,15 +27,17 @@ def initialize_agent():
     )
 
     agent.system_prompt = """
-        Eres un vendedor de la Universidad Bolivariana del Ecuador (UBE). Responde de manera cordial y precisa a
-        preguntas sobre carreras. Si te preguntan por grupos o mallas, identifica el nombre de la carrera en el mensaje
-        del usuario para buscar la información.
-        Ejemplo:
-        Pregunta: "¿Grupos de la carrera de Derecho?". Respuesta esperada: invocar la herramienta con 'nombre_carrera'='Derecho'.
-        Si no tienes la informacion necesario. indica que visiten la pagina web para mas informacion: https://sga.ube.edu.ec/
+        Eres un vendedor experimentado de la Universidad Bolivariana del Ecuador (UBE), conocido por tu habilidad para **persuadir y motivar** a los prospectos. Tu objetivo es vender las carreras, no solo informar. Responde de manera **cordial y persuasiva**, destacando los beneficios y el valor de estudiar en la UBE. 
+
+        Cuando te pregunten por los grupos o mallas, identifica el nombre de la carrera en el mensaje para buscar la información.
         
-        SIEMPRE mantente dentro de tu rol y contexto. Si el usuario te pregunta algo fuera de lo relacionado a las carreras
-        de la UBE, responde educadamente que tu única función es proveer información sobre la oferta académica de la UBE.
+        Ejemplo:
+        Pregunta: "¿Grupos de la carrera de Derecho?".
+        Respuesta esperada: invocar la herramienta con 'nombre_carrera'='Derecho'.
+
+        Si no tienes la información necesaria, dirígelos persuasivamente a la página web oficial para que realicen la matrícula: https://sga.ube.edu.ec/.
+
+        SIEMPRE mantente dentro de tu rol de vendedor. Si el usuario te pregunta algo fuera del contexto de la oferta académica de la UBE, responde educadamente que tu única función es ayudarte a descubrir la carrera perfecta para su futuro en la UBE y anímale a seguir explorando las opciones disponibles.
     """
 
     carreras_instance = fetch_carreras()
@@ -154,6 +156,7 @@ def initialize_agent():
 
         ultimo_mensaje = ctx.messages[-1] 
         id_carrera = get_id_by_name(agent.carreras.data, ultimo_mensaje.content)
+        print(f"ID CARRERA: {id_carrera}")
 
         if not id_carrera:
             await ctx.reply(f"Lo siento, no encontré esa carrera en nuestra base de datos. ¿Podrías verificar si está bien escrita o puedo listarte todas las carreras disponibles?")
@@ -178,6 +181,24 @@ def initialize_agent():
                     result += f"\n  - Créditos: {asig.creditos}"
         result += "\n"
             
+        ctx.add(Message.system(result))
+        await ctx.reply()
+
+
+    @agent.skill
+    async def skill_matricular(ctx: argo.Context):
+        """
+        Esta skill se activa cuando el usuario expresa la intención de inscribirse, matricularse,
+        o formalizar su cupo en una carrera, curso, o grupo. El agente no necesita extraer ningún parámetro,
+        ya que esta acción es un paso final en el proceso de matrícula.
+
+        Ejemplo de uso:
+        - Mensaje del usuario: "Quiero matricularme ahora mismo."
+        - Acción esperada del agente: Invocar la skill 'skill_matricular' para iniciar el proceso de matrícula.
+        """
+        # response = await matricular()
+        # result = response.message
+        result = f"¡Excelente! Tu matrícula ha sido creada con éxito. Un gran paso hacia tu futuro profesional.\n\nPara completar el proceso, contacta al número 09998989. Él te guiará en los siguientes pasos."
         ctx.add(Message.system(result))
         await ctx.reply()
 

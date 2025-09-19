@@ -4,8 +4,8 @@ from schemas.base import Response
 
 class Asignatura(BaseModel):
     asignatura: str
-    horas: int
-    creditos: Optional[int]
+    horas: int | float
+    creditos: Optional[int] = None
 
 class DataMalla(BaseModel):
     nivel_malla: str

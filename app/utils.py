@@ -17,7 +17,6 @@ def get_id_by_name(carreras: DataCarreras, mensaje: str):
     )
 
     prompts = {}
-    prompts = {}
     for x in carreras.grado:
         prompts[x.id] = x.nombre
     for x in carreras.postgrado:
