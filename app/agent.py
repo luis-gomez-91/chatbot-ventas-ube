@@ -1,13 +1,10 @@
 import argo
 from argo import Message
 from argo.skills import chat
-import requests
-from config import TOKEN, API_URL
+from config import TOKEN
 import streamlit as st
-from schemas.carreras import Carreras, DataCarreras, Carrera
-from schemas.grupos import Grupos, GrupoData
-from typing import List
-from api_helper import fetch_carreras, fetch_grupos
+from api_helper import fetch_carreras, fetch_grupos, fetch_malla
+from utils import get_id_by_name, formatear_texto_carreras
 
 @st.cache_resource
 def initialize_agent():
@@ -36,6 +33,9 @@ def initialize_agent():
         Ejemplo:
         Pregunta: "¿Grupos de la carrera de Derecho?". Respuesta esperada: invocar la herramienta con 'nombre_carrera'='Derecho'.
         Si no tienes la informacion necesario. indica que visiten la pagina web para mas informacion: https://sga.ube.edu.ec/
+        
+        SIEMPRE mantente dentro de tu rol y contexto. Si el usuario te pregunta algo fuera de lo relacionado a las carreras
+        de la UBE, responde educadamente que tu única función es proveer información sobre la oferta académica de la UBE.
     """
 
     carreras_instance = fetch_carreras()
@@ -47,32 +47,11 @@ def initialize_agent():
         if not carreras:
             return "No conozco esa carrera"
 
-        grado = "Las carreras de grado son: \n"
-        grado += "\n".join(
-            f"- ID de la carrera: {carrera.id}, Nombre de la carrera: {carrera.nombre}."
-            for carrera in carreras.grado
-        )
-
-        postgrado = "Las carreras de postgrado son: "
-        postgrado += "\n".join(
-            f"- {carrera.nombre}."
-            for carrera in carreras.postgrado
-        )
-
+        grado = formatear_texto_carreras(carreras.grado, "grado")
+        postgrado = formatear_texto_carreras(carreras.postgrado, "postgrado")
         response = f"{grado}\n{postgrado}\nLos IDS usalos para apuntar a otro endpont de ser necesario, no los muestres en la conversacion con el usuario."
         # print(response)
         return response
-    
-    # @agent.tool
-    # async def fetch_grupos(id_carrera: int):
-    #     # res = requests.get(f"{API_URL}grupos/")
-    #     response = requests.get(f"https://sga.ube.edu.ec/api/ventas/grupos/{id_carrera}")
-    #     response.raise_for_status()
-    #     grupos_data = response.json()
-    #     print(grupos_data)
-    #     print("\n")
-    #     grupos_instance = Grupos(**grupos_data)
-        # agent.grupos = grupos_instance
 
 
     @agent.tool
@@ -121,29 +100,27 @@ def initialize_agent():
 
 
     @agent.skill
-    async def skill_listar_grupos(ctx: argo.Context, nombre_carrera: str = "ELECTRICIDAD"):
+    async def skill_listar_grupos(ctx: argo.Context):
         """
-        Activa esta skill SOLO si el usuario pregunta por los grupos de una carrera específica.
-        El agente DEBE identificar el nombre de la carrera en el mensaje del usuario (ej. 'Derecho', 'Contabilidad')
-        y pasar ese valor directamente al argumento 'nombre_carrera'.
+        Esta skill se activa cuando el usuario pregunta por los grupos o cupos disponibles de una carrera específica.
+        El agente debe identificar el nombre de la carrera en el mensaje del usuario
+        y pasarlo directamente al argumento 'nombre_carrera'.
+
+        Ejemplo de uso:
+        - Mensaje del usuario: "¿Qué grupos hay para la carrera de Fisioterapia?"
+        - Acción esperada del agente: Invocar skill_listar_grupos con nombre_carrera='Fisioterapia'.
         """
 
         ultimo_mensaje = ctx.messages[-1] 
         print(f"El usuario dijo: {ultimo_mensaje.content}")
 
-        if not nombre_carrera:
-            print("SIN NOMBRE")
-            await ctx.reply(f"Claro, ¿de qué carrera te gustaría saber los grupos? Si quieres, puedo listarte todas las carreras disponibles.")
-            return
-
-        id_carrera = find_carrera_id_by_name(nombre_carrera)
+        id_carrera = get_id_by_name(agent.carreras.data, ultimo_mensaje.content)
         print(f"ID RETORNA: {id_carrera}")
 
-        if id_carrera is None:
-            await ctx.reply(f"Lo siento, no encontré la carrera de '{nombre_carrera}'. ¿Podrías verificar si está bien escrita?")
+        if id_carrera == 0:
+            await ctx.reply(f"Lo siento, no encontré la carrera. ¿Podrías verificar si está bien escrita?")
             return
 
-        print("POSI")
         # tool = await ctx.equip(tools=[listar_grupos])
         # result = await ctx.invoke(tool, id_carrera=id_carrera)
 
@@ -162,24 +139,47 @@ def initialize_agent():
         ctx.add(Message.system(result))
         await ctx.reply()
 
-   
-    def find_carrera_id_by_name(carrera_name: str):
-        print("BUSCANDO ID DE CARRERA")
-        carreras_grado: List[DataCarreras] = agent.carreras.data.grado
-        carreras_postgrado = agent.carreras.data.postgrado
 
-        for carrera in carreras_grado:
-            print(f"GRADO: {carrera.id} - {carrera.nombre}")
-            if carrera.nombre.lower() == carrera_name.lower():
-                print(f"GRADO SELECT: {carrera.id} - {carrera.nombre}")
-                return carrera.id
+    @agent.skill
+    async def skill_listar_malla(ctx: argo.Context, nombre_carrera: str = None):
+        """
+        Esta skill se activa cuando el usuario pregunta por la malla curricular de una carrera.
+        El agente debe identificar el nombre de la carrera en el mensaje del usuario
+        y pasarlo al argumento 'nombre_carrera'.
+
+        Ejemplo de uso:
+        - Mensaje del usuario: "¿Cuál es la malla de la carrera de Derecho?"
+        - Acción esperada del agente: Invocar skill_listar_malla con nombre_carrera='Derecho'.
+        """
+
+        ultimo_mensaje = ctx.messages[-1] 
+        id_carrera = get_id_by_name(agent.carreras.data, ultimo_mensaje.content)
+
+        if not id_carrera:
+            await ctx.reply(f"Lo siento, no encontré esa carrera en nuestra base de datos. ¿Podrías verificar si está bien escrita o puedo listarte todas las carreras disponibles?")
+            return
+
+        malla_instance = await fetch_malla(id_carrera)
+        malla = malla_instance.data
+
+        if not malla:
+            return "No hay malla disponible para esta carrera."
+
+        result = f"La Malla curricular de la carrera es la siguiente:\n"
+        
+        for nivel in malla:
+            result += f"\n### Período: {nivel.nivel_malla}"
+            result += f"\nLas asignaturas de este período son:"
+
+            for asig in nivel.asignaturas:
+                result += f"\n- Asignatura: {asig.asignatura}"
+                result += f"\n  - Horas: {asig.horas}"
+                if asig.creditos is not None:
+                    result += f"\n  - Créditos: {asig.creditos}"
+        result += "\n"
             
-        for carrera in carreras_postgrado:
-            print(f"POSTGRADO: {carrera.id} - {carrera.nombre}")
-            if carrera.nombre.lower() == carrera_name.lower():
-                print(f"POSTGRADO SELECT: {carrera.id} - {carrera.nombre}")
-                return carrera.id
-        return None
+        ctx.add(Message.system(result))
+        await ctx.reply()
 
 
     return agent
